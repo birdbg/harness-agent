@@ -25,15 +25,28 @@ def _parse_json(text: str) -> Any:
     return json.loads(cleaned)
 
 
+def _task_with_context(context_prompt: str, task_content: str) -> str:
+    """Place Context Pack before task data while preserving task precedence."""
+    if not context_prompt:
+        return task_content
+    return (
+        "Use the Context Pack below as the default project guidance and follow it with priority. "
+        "If it conflicts with the user's current task, the user's current task takes precedence.\n\n"
+        f"{context_prompt}\n\n"
+        "# Current User Task\n\n"
+        f"{task_content}"
+    )
+
+
 class Planner:
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
         self.prompt = _load_prompt("planner")
 
-    def run(self, task: str) -> list[dict[str, str]]:
+    def run(self, task: str, context_prompt: str = "") -> list[dict[str, str]]:
         messages = [
             {"role": "system", "content": self.prompt},
-            {"role": "user", "content": task},
+            {"role": "user", "content": _task_with_context(context_prompt, task)},
         ]
         for attempt in range(2):
             response = self.llm.chat(messages)
@@ -79,6 +92,7 @@ class Worker:
         step: dict[str, str],
         previous_results: list[dict[str, Any]],
         review_feedback: str | None = None,
+        context_prompt: str = "",
     ) -> str:
         context = json.dumps(previous_results, ensure_ascii=False, indent=2)
         return self.llm.chat(
@@ -86,11 +100,14 @@ class Worker:
                 {"role": "system", "content": self.prompt},
                 {
                     "role": "user",
-                    "content": (
-                        f"Original task:\n{task}\n\nCurrent step:\n"
-                        f"{json.dumps(step, ensure_ascii=False, indent=2)}\n\n"
-                        f"Previous results:\n{context}\n\n"
-                        f"Reviewer feedback:\n{review_feedback or 'None (first attempt)'}"
+                    "content": _task_with_context(
+                        context_prompt,
+                        (
+                            f"Original task:\n{task}\n\nCurrent step:\n"
+                            f"{json.dumps(step, ensure_ascii=False, indent=2)}\n\n"
+                            f"Previous results:\n{context}\n\n"
+                            f"Reviewer feedback:\n{review_feedback or 'None (first attempt)'}"
+                        ),
                     ),
                 },
             ],
@@ -104,7 +121,11 @@ class Reviewer:
         self.prompt = _load_prompt("reviewer")
 
     def run(
-        self, task: str, plan: list[dict[str, str]], results: list[dict[str, Any]]
+        self,
+        task: str,
+        plan: list[dict[str, str]],
+        results: list[dict[str, Any]],
+        context_prompt: str = "",
     ) -> dict[str, Any]:
         payload = json.dumps(
             {"task": task, "plan": plan, "worker_results": results},
@@ -114,7 +135,7 @@ class Reviewer:
         response = self.llm.chat(
             [
                 {"role": "system", "content": self.prompt},
-                {"role": "user", "content": payload},
+                {"role": "user", "content": _task_with_context(context_prompt, payload)},
             ]
         )
         try:

@@ -1,6 +1,42 @@
-# Minimal Multi-Agent Harness
+# Minimal Multi-Agent Harness v0.3.0
 
 一个最小可运行的 `Planner → Worker → Reviewer` Python 多智能体框架。
+
+## v0.3.0：Context Pack
+
+Context Pack 是一组随每次任务自动加载的稳定知识，用来补充用户的一句话请求。Planner、Worker、Reviewer 会在看到当前任务之前先看到同一份项目背景、业务规则、术语、输出风格、用户偏好和参考样例。模型应优先遵守 Context Pack；若其中内容与用户当前任务冲突，则以当前任务为准。
+
+知识文件位于 `knowledge/`：
+
+```text
+knowledge/
+├── project_profile.md
+├── business_rules.md
+├── terminology.md
+├── output_style.md
+├── user_preferences.md
+└── examples/
+    ├── report_example.md
+    ├── excel_example.md
+    └── html_example.md
+```
+
+直接编辑对应 Markdown 文件即可维护知识。建议每条规则明确、简短、可验证，样例只保留值得复用的结构与风格。缺失文件会被自动跳过，不会阻断任务；修改后的内容从下一次任务开始生效。
+
+每个任务响应和 `outputs/<task_id>.json` 都包含：
+
+- `context_used`：本次是否加载了知识文件；
+- `context_files`：本次实际加载的文件列表。
+
+验证上下文是否生效时，可先在 `output_style.md` 增加一条容易识别的要求，例如“所有总结以风险提示结尾”，再提交：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"根据项目背景写一份本周进展简报，并生成 Markdown 文件"}'
+```
+
+检查响应中的 `context_used`、`context_files`，并确认 Planner 步骤、Worker 结果、Reviewer 最终回答及生成产物遵循该要求。然后提交一条明确冲突的当前任务，也可验证当前任务具有更高优先级。
 
 ## 安装
 

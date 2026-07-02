@@ -15,7 +15,7 @@ from graph import HarnessGraph
 
 load_dotenv()
 
-app = FastAPI(title="Minimal Multi-Agent Harness", version="0.1.0")
+app = FastAPI(title="Minimal Multi-Agent Harness", version="0.3.0")
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 
 
