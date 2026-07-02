@@ -30,21 +30,42 @@ class Planner:
         self.llm = llm
         self.prompt = _load_prompt("planner")
 
-    def run(self, task: str) -> list[str]:
-        response = self.llm.chat(
-            [
-                {"role": "system", "content": self.prompt},
-                {"role": "user", "content": task},
-            ]
-        )
-        try:
-            data = _parse_json(response)
-            steps = data["steps"] if isinstance(data, dict) else data
-            if isinstance(steps, list) and steps:
-                return [str(step) for step in steps]
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-        return [response or task]
+    def run(self, task: str) -> list[dict[str, str]]:
+        messages = [
+            {"role": "system", "content": self.prompt},
+            {"role": "user", "content": task},
+        ]
+        for attempt in range(2):
+            response = self.llm.chat(messages)
+            try:
+                data = _parse_json(response)
+                steps = data["steps"]
+                if not isinstance(steps, list) or not steps:
+                    raise ValueError("steps must be a non-empty list")
+                normalized = []
+                for index, step in enumerate(steps, 1):
+                    if not isinstance(step, dict) or not step.get("description"):
+                        raise ValueError("each step must be an object with description")
+                    normalized.append(
+                        {
+                            "id": str(step.get("id") or f"step_{index}"),
+                            "description": str(step["description"]),
+                            "expected_output": str(step.get("expected_output") or "Completed step result"),
+                        }
+                    )
+                return normalized
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if attempt == 0:
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": response},
+                            {
+                                "role": "user",
+                                "content": f"Invalid planner JSON ({exc}). Return only the required JSON object.",
+                            },
+                        ]
+                    )
+        raise ValueError("Planner failed to return valid structured JSON after 2 attempts")
 
 
 class Worker:
@@ -52,7 +73,13 @@ class Worker:
         self.llm = llm
         self.prompt = _load_prompt("worker")
 
-    def run(self, task: str, step: str, previous_results: list[str]) -> str:
+    def run(
+        self,
+        task: str,
+        step: dict[str, str],
+        previous_results: list[dict[str, Any]],
+        review_feedback: str | None = None,
+    ) -> str:
         context = json.dumps(previous_results, ensure_ascii=False, indent=2)
         return self.llm.chat(
             [
@@ -60,8 +87,10 @@ class Worker:
                 {
                     "role": "user",
                     "content": (
-                        f"Original task:\n{task}\n\nCurrent step:\n{step}\n\n"
-                        f"Previous results:\n{context}"
+                        f"Original task:\n{task}\n\nCurrent step:\n"
+                        f"{json.dumps(step, ensure_ascii=False, indent=2)}\n\n"
+                        f"Previous results:\n{context}\n\n"
+                        f"Reviewer feedback:\n{review_feedback or 'None (first attempt)'}"
                     ),
                 },
             ],
@@ -74,7 +103,9 @@ class Reviewer:
         self.llm = llm
         self.prompt = _load_prompt("reviewer")
 
-    def run(self, task: str, plan: list[str], results: list[str]) -> dict[str, Any]:
+    def run(
+        self, task: str, plan: list[dict[str, str]], results: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         payload = json.dumps(
             {"task": task, "plan": plan, "worker_results": results},
             ensure_ascii=False,
@@ -88,8 +119,19 @@ class Reviewer:
         )
         try:
             reviewed = _parse_json(response)
-            if isinstance(reviewed, dict) and "final_answer" in reviewed:
+            if (
+                isinstance(reviewed, dict)
+                and isinstance(reviewed.get("approved"), bool)
+                and "final_answer" in reviewed
+            ):
+                reviewed.setdefault("feedback", "")
+                reviewed.setdefault("failed_step_ids", [])
                 return reviewed
         except (json.JSONDecodeError, TypeError):
             pass
-        return {"approved": True, "feedback": "Unstructured review", "final_answer": response}
+        return {
+            "approved": False,
+            "feedback": "Reviewer returned invalid structured JSON",
+            "failed_step_ids": [],
+            "final_answer": response,
+        }

@@ -7,7 +7,15 @@ Break the user's task into a short, ordered list of concrete steps. Keep the pla
 Return only valid JSON in this exact shape:
 
 ```json
-{"steps": ["step 1", "step 2"]}
+{
+  "steps": [
+    {
+      "id": "step_1",
+      "description": "concrete action to execute",
+      "expected_output": "observable result of this step"
+    }
+  ]
+}
 ```
 
-Prefer 1–5 steps. Each step must be understandable without hidden context.
+Prefer 1–5 steps. IDs must be unique and stable. Each step must be understandable without hidden context.

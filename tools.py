@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from html import escape
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,59 @@ def write_file(path: str, content: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} characters to {path}"
+
+
+def create_artifact(
+    format: str,
+    path: str,
+    title: str,
+    content: str = "",
+    sheets: list[dict[str, Any]] | None = None,
+) -> str:
+    """Generate a Markdown, HTML, Word, or Excel artifact inside the project."""
+    artifact_format = format.lower()
+    extensions = {"markdown": ".md", "html": ".html", "word": ".docx", "excel": ".xlsx"}
+    if artifact_format not in extensions:
+        raise ValueError(f"Unsupported artifact format: {format}")
+    target = _safe_path(path)
+    if target.suffix.lower() != extensions[artifact_format]:
+        raise ValueError(f"{artifact_format} artifacts must use {extensions[artifact_format]}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if artifact_format == "markdown":
+        target.write_text(f"# {title}\n\n{content.rstrip()}\n", encoding="utf-8")
+    elif artifact_format == "html":
+        paragraphs = "\n".join(
+            f"<p>{escape(paragraph)}</p>" for paragraph in content.split("\n\n") if paragraph.strip()
+        )
+        document = (
+            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            f"<title>{escape(title)}</title></head><body><main><h1>{escape(title)}</h1>"
+            f"{paragraphs}</main></body></html>\n"
+        )
+        target.write_text(document, encoding="utf-8")
+    elif artifact_format == "word":
+        from docx import Document
+
+        document = Document()
+        document.add_heading(title, level=0)
+        for paragraph in content.split("\n\n"):
+            if paragraph.strip():
+                document.add_paragraph(paragraph.strip())
+        document.save(target)
+    else:
+        from openpyxl import Workbook
+
+        if not sheets:
+            raise ValueError("Excel artifacts require at least one sheet")
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        for sheet_data in sheets:
+            worksheet = workbook.create_sheet(str(sheet_data.get("name") or "Sheet")[:31])
+            for row in sheet_data.get("rows", []):
+                worksheet.append(list(row))
+        workbook.save(target)
+    return f"Created {artifact_format} artifact at {path}"
 
 
 def run_python(code: str) -> str:
@@ -57,10 +111,40 @@ def run_python(code: str) -> str:
 TOOL_FUNCTIONS: dict[str, Callable[..., str]] = {
     "read_file": read_file,
     "write_file": write_file,
+    "create_artifact": create_artifact,
     "run_python": run_python,
 }
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_artifact",
+            "description": "Create a Markdown (.md), HTML (.html), Word (.docx), or Excel (.xlsx) file inside the project directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "enum": ["markdown", "html", "word", "excel"]},
+                    "path": {"type": "string", "description": "Relative output path with the matching extension."},
+                    "title": {"type": "string"},
+                    "content": {"type": "string", "description": "Body text for Markdown, HTML, and Word."},
+                    "sheets": {
+                        "type": "array",
+                        "description": "Required for Excel. Each sheet contains a name and a 2D rows array.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "rows": {"type": "array", "items": {"type": "array", "items": {}}},
+                            },
+                            "required": ["name", "rows"],
+                        },
+                    },
+                },
+                "required": ["format", "path", "title"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
