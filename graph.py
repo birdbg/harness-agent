@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agents import Planner, Reviewer, Worker
+from context import build_context_prompt, get_context_metadata, load_context_pack
 from llm import LLMClient
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
@@ -22,18 +23,23 @@ class HarnessGraph:
         self.reviewer = Reviewer(llm)
 
     def run(self, task_id: str, task: str) -> dict[str, Any]:
-        plan = self.planner.run(task)
+        context_pack = load_context_pack()
+        context_prompt = build_context_prompt(context_pack)
+        context_metadata = get_context_metadata(context_pack)
+        plan = self.planner.run(task, context_prompt=context_prompt)
         worker_results: list[dict[str, Any]] = []
         for step in plan:
             worker_results.append(
                 {
                     "step_id": step["id"],
                     "attempt": 1,
-                    "result": self.worker.run(task, step, worker_results),
+                    "result": self.worker.run(
+                        task, step, worker_results, context_prompt=context_prompt
+                    ),
                 }
             )
 
-        review = self.reviewer.run(task, plan, worker_results)
+        review = self.reviewer.run(task, plan, worker_results, context_prompt=context_prompt)
         review_history = [review]
         max_rework_rounds = max(0, int(os.getenv("MAX_REWORK_ROUNDS", "2")))
         for round_number in range(1, max_rework_rounds + 1):
@@ -48,16 +54,23 @@ class HarnessGraph:
                         "step_id": step["id"],
                         "attempt": len(previous_attempts) + 1,
                         "result": self.worker.run(
-                            task, step, worker_results, str(review.get("feedback", ""))
+                            task,
+                            step,
+                            worker_results,
+                            str(review.get("feedback", "")),
+                            context_prompt=context_prompt,
                         ),
                     }
                 )
-            review = self.reviewer.run(task, plan, worker_results)
+            review = self.reviewer.run(
+                task, plan, worker_results, context_prompt=context_prompt
+            )
             review_history.append(review)
 
         result = {
             "task_id": task_id,
             "task": task,
+            **context_metadata,
             "plan": plan,
             "worker_results": worker_results,
             "review": review,
